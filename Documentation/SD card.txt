@@ -1,0 +1,166 @@
+
+THREAD(Mp3Player, arg)
+{
+	//General variables
+	FILE *stream = (FILE *) arg;
+	size_t rbytes = 0;
+	char *mp3buf;
+	int result = NOK;
+	int nrBytesRead = 0;
+	unsigned char iflag;
+	
+	//Specific mp3 needed variables
+	int codec;
+   uint8_t *mp3buff;
+   
+   //Test
+   int fileHandle;
+   
+   //First init the nut os buffer
+   if( 0 != NutSegBufInit(8192) )
+	{
+		// Reset global buffer
+		iflag = VsPlayerInterrupts(0);
+		NutSegBufReset();
+		VsPlayerInterrupts(iflag);
+		
+		result = OK;
+	}
+	
+	//Try enabling the vs1003b chip in the sr100/sr120
+	if( OK == result )
+	{
+		if( -1 == VsPlayerInit() )
+		{
+			LogMsg_P(LOG_INFO, PSTR("Retry init Vs1003b \n"));
+			if( -1 == VsPlayerReset(0) )
+			{
+				result = NOK;
+				LogMsg_P(LOG_INFO, PSTR("Failed init Vs1003b \n"));
+			}
+			else
+			{
+				LogMsg_P(LOG_INFO, PSTR("Vs1003b retry initialised! \n"));
+			}
+		}
+		else
+		{
+			LogMsg_P(LOG_INFO, PSTR("Vs1003b initialised! \n"));
+		}
+	}
+	
+	//If thread is stopped, exit the thread
+	if(threadStop)
+	{
+		NutThreadExit();
+	}
+
+	//Try open the mp3 file
+   //fileHandle = _open("videoplayback.mp3", _O_RDONLY | _O_BINARY);
+   fileHandle = _open("videoplayback.mp3", _O_RDONLY);
+   if (codec == -1) 
+   {
+       printf("No codec\n");
+       return -1;
+   }
+
+   //Init the mp3buff
+   mp3buff = malloc(512);
+   for (;;) 
+   {
+       int got;
+       uint8_t *bp;
+
+       bp = mp3buff;
+       got = _read(fd, bp, 512);
+       if (got <= 0) 
+	   {
+           break;
+       }
+       while (got) 
+	   {
+           int sent;
+
+           sent = _write(codec, bp, got);
+           if (sent < 0) {
+               break;
+           }
+           if (sent == 0) {
+               NutSleep(1);
+           } else {
+               got -= sent;
+               bp += sent;
+           }
+       }
+   }
+   
+   /*
+   *	try converting this shit wtf
+   *
+   */
+   
+   while(result)
+	{
+		/*
+		 * Query number of byte available in MP3 buffer.
+		 */
+        iflag = VsPlayerInterrupts(0);
+        mp3buf = NutSegBufWriteRequest(&rbytes);
+        VsPlayerInterrupts(iflag);
+		
+		//LogMsg_P(LOG_INFO, PSTR("buffer"));
+		
+		if(threadStop)
+		{
+			LogMsg_P(LOG_INFO, PSTR("Exit thread"));
+			NutThreadExit();
+		}
+		
+		// Bij de eerste keer: als player niet draait maak player wakker (kickit)
+		if( VS_STATUS_RUNNING != VsGetStatus() )
+		{
+			LogMsg_P(LOG_INFO, PSTR("Player not running\n"));
+			if( rbytes < 1024 )
+			{
+				printf("VsPlayerKick()\n");
+				VsPlayerKick();
+			}
+		}
+		
+		while( rbytes )
+		{
+			//LogMsg_P(LOG_INFO, PSTR("streaming"));
+			// Copy rbytes (van 1 byte) van stream naar mp3buf.
+			
+			//nrBytesRead = _read(fd, bp, 512);
+			nrBytesRead = fread(mp3buf,1 ,rbytes,stream);
+			
+			if( nrBytesRead > 0 )
+			{
+				iflag = VsPlayerInterrupts(0);
+				mp3buf = NutSegBufWriteCommit(nrBytesRead);
+				VsPlayerInterrupts(iflag);
+				if( nrBytesRead < rbytes && nrBytesRead < 512 )
+				{
+					NutSleep(250);
+				}
+			}
+			else
+			{
+				LogMsg_P(LOG_INFO, PSTR("break1"));
+				hasConnection = false;
+				break;
+			}
+			rbytes -= nrBytesRead;
+			
+			if( nrBytesRead <= 0 )
+			{
+				LogMsg_P(LOG_INFO, PSTR("break2"));
+				break;
+			}				
+		}
+	}
+   
+   free(mp3buff);
+   _close(codec);
+}
